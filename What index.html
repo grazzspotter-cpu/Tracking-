@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hand Tracking - MediaPipe</title>
+<style>
+  :root{
+    --bg: #05060a;
+    --panel: rgba(255,255,255,0.06);
+    --accent: #00f5ff;
+    --accent2: #ff2fd0;
+    --text: #eaf6ff;
+    --muted: #8aa0ad;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]){
+      --bg:#eef2f5; --panel:rgba(0,0,0,0.05); --text:#0c1418; --muted:#4a5a63;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#05060a; --panel:rgba(255,255,255,0.06); --text:#eaf6ff; --muted:#8aa0ad;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+  }
+  #app {
+    position: relative;
+    width: 100%; height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .stage {
+    position: relative;
+    width: min(96vw, 900px);
+    aspect-ratio: 4 / 3;
+    border-radius: 18px;
+    overflow: hidden;
+    background: #000;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.08), 0 20px 60px rgba(0,0,0,0.5);
+  }
+  video, canvas {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1); /* mirror */
+  }
+  video { opacity: 1; }
+
+  .hud {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    display: flex; flex-direction: column; justify-content: space-between;
+    padding: 14px 16px;
+  }
+  .hud-top {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    font-size: 12px; letter-spacing: 0.5px; color: var(--accent);
+    text-shadow: 0 0 8px rgba(0,245,255,0.6);
+  }
+  .rec {
+    display: flex; align-items: center; gap: 6px;
+    background: rgba(0,0,0,0.35); padding: 4px 10px; border-radius: 20px;
+    backdrop-filter: blur(4px);
+  }
+  .rec::before {
+    content: ''; width: 8px; height: 8px; border-radius: 50%;
+    background: #ff3b3b; box-shadow: 0 0 8px #ff3b3b;
+    animation: blink 1s infinite;
+  }
+  @keyframes blink { 50% { opacity: 0.25; } }
+  .badge {
+    background: rgba(0,0,0,0.35); padding: 4px 10px; border-radius: 20px;
+    backdrop-filter: blur(4px);
+  }
+  .hud-bottom {
+    display: flex; justify-content: space-between; align-items: flex-end;
+  }
+  .count-box {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(0,245,255,0.4);
+    border-radius: 14px;
+    padding: 6px 18px;
+    text-align: center;
+    backdrop-filter: blur(6px);
+  }
+  .count-num {
+    font-size: 40px; font-weight: 800; color: var(--accent);
+    text-shadow: 0 0 14px rgba(0,245,255,0.8);
+    line-height: 1;
+  }
+  .count-label { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+  .status {
+    font-size: 11px; color: var(--muted);
+    background: rgba(0,0,0,0.35); padding: 4px 10px; border-radius: 20px;
+    backdrop-filter: blur(4px);
+  }
+
+  #loading {
+    position: absolute; inset: 0; z-index: 5;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; background: #05060a; color: #8aa0ad; font-size: 13px;
+  }
+  .spinner {
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 3px solid rgba(0,245,255,0.2); border-top-color: var(--accent);
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .controls {
+    margin-top: 14px; display: flex; gap: 10px; justify-content: center;
+  }
+  button {
+    background: var(--panel); color: var(--text);
+    border: 1px solid rgba(255,255,255,0.12);
+    padding: 9px 16px; border-radius: 10px;
+    font-size: 13px; cursor: pointer;
+    transition: 0.15s;
+  }
+  button:hover { background: rgba(0,245,255,0.15); border-color: var(--accent); }
+  button:active { transform: scale(0.97); }
+
+  .wrap { display:flex; flex-direction:column; align-items:center; }
+  .title {
+    font-size: 13px; color: var(--muted); margin-bottom: 10px; letter-spacing: 0.5px;
+    text-align:center;
+  }
+  .err {
+    position:absolute; inset:0; z-index:6; display:flex; align-items:center; justify-content:center;
+    text-align:center; padding: 24px; color:#ff8a8a; font-size:13px; background:#05060a;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="wrap">
+    <div class="title">✋ Real-time Hand Tracking &nbsp;•&nbsp; MediaPipe + Canvas</div>
+    <div class="stage" id="stage">
+      <video id="video" playsinline autoplay muted></video>
+      <canvas id="canvas"></canvas>
+      <div class="hud">
+        <div class="hud-top">
+          <div class="rec">REC</div>
+          <div class="badge" id="timeBadge">--:--:--</div>
+        </div>
+        <div class="hud-bottom">
+          <div class="count-box">
+            <div class="count-num" id="fingerCount">0</div>
+            <div class="count-label">JARI</div>
+          </div>
+          <div class="status" id="statusBadge">Mencari tangan...</div>
+        </div>
+      </div>
+      <div id="loading">
+        <div class="spinner"></div>
+        <div>Memuat model &amp; kamera...</div>
+      </div>
+      <div class="err" id="errBox" style="display:none;"></div>
+    </div>
+    <div class="controls">
+      <button id="clearBtn">Bersihkan Trail</button>
+      <button id="toggleTrail">Trail: ON</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+<script>
+(function(){
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const loading = document.getElementById('loading');
+  const errBox = document.getElementById('errBox');
+  const fingerCountEl = document.getElementById('fingerCount');
+  const statusBadge = document.getElementById('statusBadge');
+  const timeBadge = document.getElementById('timeBadge');
+  const clearBtn = document.getElementById('clearBtn');
+  const toggleTrailBtn = document.getElementById('toggleTrail');
+
+  let trailEnabled = true;
+  let trailPoints = []; // {x,y,t}
+  const MAX_TRAIL_AGE = 900; // ms
+  const MAX_TRAIL_POINTS = 60;
+
+  function resizeCanvas() {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+  }
+  window.addEventListener('resize', resizeCanvas);
+
+  function updateClock() {
+    const now = new Date();
+    const pad = n => String(n).padStart(2,'0');
+    timeBadge.textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
+
+  // Hitung jumlah jari terbuka dari landmark (21 titik MediaPipe)
+  function countFingers(landmarks, handedness) {
+    let count = 0;
+    const tips = [8, 12, 16, 20];
+    const pips = [6, 10, 14, 18];
+
+    // 4 jari (telunjuk-kelingking): terbuka jika tip lebih tinggi (y lebih kecil) dari pip
+    for (let i = 0; i < tips.length; i++) {
+      if (landmarks[tips[i]].y < landmarks[pips[i]].y - 0.02) count++;
+    }
+
+    // Ibu jari: bandingkan posisi x tip vs ip, tergantung tangan kiri/kanan
+    const thumbTip = landmarks[4];
+    const thumbIp = landmarks[3];
+    const isRight = handedness === 'Right';
+    if (isRight) {
+      if (thumbTip.x < thumbIp.x - 0.02) count++;
+    } else {
+      if (thumbTip.x > thumbIp.x + 0.02) count++;
+    }
+    return count;
+  }
+
+  function drawTrail() {
+    const now = performance.now();
+    trailPoints = trailPoints.filter(p => now - p.t < MAX_TRAIL_AGE);
+    if (trailPoints.length < 2) return;
+
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (let i = 1; i < trailPoints.length; i++) {
+      const p0 = trailPoints[i-1];
+      const p1 = trailPoints[i];
+      const age = (now - p1.t) / MAX_TRAIL_AGE;
+      const alpha = Math.max(0, 1 - age);
+      const width = Math.max(1, 6 * alpha);
+
+      ctx.strokeStyle = `rgba(0, 245, 255, ${alpha})`;
+      ctx.shadowColor = 'rgba(0, 245, 255, 0.8)';
+      ctx.shadowBlur = 12 * alpha;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawSkeleton(landmarks) {
+    const connections = window.HAND_CONNECTIONS;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1.5;
+    for (const [a,b] of connections) {
+      const pa = landmarks[a], pb = landmarks[b];
+      ctx.beginPath();
+      ctx.moveTo(pa.x * canvas.width, pa.y * canvas.height);
+      ctx.lineTo(pb.x * canvas.width, pb.y * canvas.height);
+      ctx.stroke();
+    }
+    for (const lm of landmarks) {
+      ctx.beginPath();
+      ctx.fillStyle = 'rgba(0,245,255,0.85)';
+      ctx.arc(lm.x*canvas.width, lm.y*canvas.height, 2.5, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function onResults(results) {
+    ctx.save();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (trailEnabled) drawTrail();
+
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+      statusBadge.textContent = `${results.multiHandLandmarks.length} tangan terdeteksi`;
+      let totalFingers = 0;
+
+      results.multiHandLandmarks.forEach((landmarks, idx) => {
+        const handedness = results.multiHandedness?.[idx]?.label || 'Right';
+        drawSkeleton(landmarks);
+        totalFingers += countFingers(landmarks, handedness);
+
+        // titik ujung telunjuk untuk trail
+        const indexTip = landmarks[8];
+        const x = indexTip.x * canvas.width;
+        const y = indexTip.y * canvas.height;
+
+        if (trailEnabled) {
+          trailPoints.push({ x, y, t: performance.now() });
+          if (trailPoints.length > MAX_TRAIL_POINTS) trailPoints.shift();
+        }
+
+        // crosshair di ujung jari
+        ctx.save();
+        ctx.strokeStyle = '#00f5ff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, y, 9, 0, Math.PI*2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x-14, y); ctx.lineTo(x+14, y);
+        ctx.moveTo(x, y-14); ctx.lineTo(x, y+14);
+        ctx.strokeStyle = 'rgba(0,245,255,0.6)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
+      });
+
+      fingerCountEl.textContent = totalFingers;
+    } else {
+      statusBadge.textContent = 'Mencari tangan...';
+      fingerCountEl.textContent = '0';
+    }
+    ctx.restore();
+  }
+
+  async function start() {
+    try {
+      resizeCanvas();
+
+      const hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+      });
+      hands.setOptions({
+        maxNumHands: 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6
+      });
+      hands.onResults(onResults);
+
+      const camera = new Camera(video, {
+        onFrame: async () => { await hands.send({ image: video }); },
+        width: 640,
+        height: 480
+      });
+      await camera.start();
+
+      loading.style.display = 'none';
+    } catch (err) {
+      loading.style.display = 'none';
+      errBox.style.display = 'flex';
+      errBox.textContent = 'Tidak bisa mengakses kamera. Izinkan akses kamera di browser lalu muat ulang halaman.';
+      console.error(err);
+    }
+  }
+
+  clearBtn.addEventListener('click', () => { trailPoints = []; });
+  toggleTrailBtn.addEventListener('click', () => {
+    trailEnabled = !trailEnabled;
+    toggleTrailBtn.textContent = 'Trail: ' + (trailEnabled ? 'ON' : 'OFF');
+    if (!trailEnabled) trailPoints = [];
+  });
+
+  start();
+})();
+</script>
+</body>
+</html>
